@@ -108,6 +108,8 @@ state = {
     "alert_cooldowns": {},
     "last_error": "",
     "error_count": 0,
+    "top_bid_orders": [],
+    "top_ask_orders": [],
 }
 
 
@@ -488,6 +490,12 @@ async def depth_scan_loop():
                 state["total_bid_depth"] = round(tb, 4)
                 state["total_ask_depth"] = round(ta, 4)
 
+                # Top orders (biggest individual orders in range)
+                sorted_bids = sorted(fb, key=lambda x: x[1], reverse=True)[:5]
+                sorted_asks = sorted(fa, key=lambda x: x[1], reverse=True)[:5]
+                state["top_bid_orders"] = [{"price": p, "qty": q, "usdt": round(p*q)} for p, q in sorted_bids]
+                state["top_ask_orders"] = [{"price": p, "qty": q, "usdt": round(p*q)} for p, q in sorted_asks]
+
                 if config.get("bot_enabled", True):
                     detect_and_track_walls(fb, fa, cp)
 
@@ -567,6 +575,8 @@ def api_status():
         "active_walls_count": len(state["active_walls"]),
         "last_error": state["last_error"],
         "error_count": state["error_count"],
+        "top_bid_orders": state["top_bid_orders"],
+        "top_ask_orders": state["top_ask_orders"],
     }
 
 
@@ -773,6 +783,22 @@ input:checked+.sl::before{transform:translateX(20px)}
 <div class="mc"><div class="mc-label">Bid Derinligi</div><div class="mc-val green" id="mBidD">0 BTC</div><div class="mc-sub">Toplam alim emri</div></div>
 <div class="mc"><div class="mc-label">Ask Derinligi</div><div class="mc-val red" id="mAskD">0 BTC</div><div class="mc-sub">Toplam satim emri</div></div>
 <div class="mc"><div class="mc-label">Aktif Duvarlar</div><div class="mc-val blue" id="mActive">0</div><div class="mc-sub">Su an takip edilen</div></div>
+<div class="mc" style="border-left:3px solid var(--green)"><div class="mc-label">&#x1f7e2; En Buyuk BID Emri</div><div class="mc-val green" id="mTopBid" style="font-size:18px">--</div><div class="mc-sub" id="mTopBidSub">--</div></div>
+<div class="mc" style="border-left:3px solid var(--red)"><div class="mc-label">&#x1f534; En Buyuk ASK Emri</div><div class="mc-val red" id="mTopAsk" style="font-size:18px">--</div><div class="mc-sub" id="mTopAskSub">--</div></div>
+</div>
+
+<div class="depth-card" style="margin-bottom:16px">
+<div class="card-h" style="margin-bottom:12px"><h2>&#x1f3af; En Buyuk Emirler (Top 5 Bid + Top 5 Ask)</h2></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+<div>
+<div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px">&#x1f7e2; ALIM (BID) - Buyukten Kucuge</div>
+<table><thead><tr><th>Fiyat</th><th>Miktar</th><th>USDT</th></tr></thead><tbody id="topBidsBody"><tr><td colspan="3" style="color:var(--muted);text-align:center">--</td></tr></tbody></table>
+</div>
+<div>
+<div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">&#x1f534; SATIM (ASK) - Buyukten Kucuge</div>
+<table><thead><tr><th>Fiyat</th><th>Miktar</th><th>USDT</th></tr></thead><tbody id="topAsksBody"><tr><td colspan="3" style="color:var(--muted);text-align:center">--</td></tr></tbody></table>
+</div>
+</div>
 </div>
 
 <div class="depth-card">
@@ -1066,6 +1092,16 @@ async function updateStatus(){
    document.getElementById('mAth').textContent=d.ath_wall_qty.toLocaleString()+' BTC';
    document.getElementById('mAthSub').textContent='$'+fmtNum(d.ath_wall_price)+' ('+d.ath_wall_side+')';
   }
+
+  // Top Orders
+  const tb1=d.top_bid_orders||[];
+  const ta1=d.top_ask_orders||[];
+  if(tb1.length){document.getElementById('mTopBid').textContent=fmtNum(tb1[0].qty)+' BTC';document.getElementById('mTopBidSub').textContent='$'+fmtNum(tb1[0].price)+' (~$'+(tb1[0].usdt/1e6).toFixed(2)+'M)'}
+  if(ta1.length){document.getElementById('mTopAsk').textContent=fmtNum(ta1[0].qty)+' BTC';document.getElementById('mTopAskSub').textContent='$'+fmtNum(ta1[0].price)+' (~$'+(ta1[0].usdt/1e6).toFixed(2)+'M)'}
+  const bidsTbl=document.getElementById('topBidsBody');
+  const asksTbl=document.getElementById('topAsksBody');
+  if(tb1.length){bidsTbl.innerHTML=tb1.map((o,i)=>'<tr'+(i===0?' style="background:rgba(16,185,129,0.08)"':'')+'><td><b>$'+fmtNum(o.price)+'</b></td><td><b>'+fmtNum(o.qty)+' BTC</b></td><td>$'+(o.usdt/1e6).toFixed(2)+'M</td></tr>').join('')}
+  if(ta1.length){asksTbl.innerHTML=ta1.map((o,i)=>'<tr'+(i===0?' style="background:rgba(239,68,68,0.08)"':'')+'><td><b>$'+fmtNum(o.price)+'</b></td><td><b>'+fmtNum(o.qty)+' BTC</b></td><td>$'+(o.usdt/1e6).toFixed(2)+'M</td></tr>').join('')}
 
   const wd=document.getElementById('wsDot'),wl=document.getElementById('wsLabel');
   if(d.is_connected){wd.className='dot dot-g';wl.textContent='Canli Bagli'}
