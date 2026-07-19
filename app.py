@@ -81,6 +81,8 @@ state = {
     "total_alerts_sent": 0,
     "last_scan_ts": 0,
     "alert_cooldowns": {},
+    "last_error": "",
+    "error_count": 0,
 }
 
 # ==============================================================================
@@ -363,14 +365,36 @@ def detect_and_track_walls(bids: list, asks: list, current_price: float):
 # ==============================================================================
 
 
+BINANCE_BASES = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+    "https://fapi4.binance.com",
+]
+
+
 async def depth_scan_loop():
     await asyncio.sleep(2)
     print("[SCANNER] Depth scanner started.")
+    base_idx = 0
     while True:
         try:
             symbol = config.get("symbol", "BTCUSDT").upper()
-            url = f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit=1000"
+            base = BINANCE_BASES[base_idx % len(BINANCE_BASES)]
+            url = f"{base}/fapi/v1/depth?symbol={symbol}&limit=1000"
             resp = await asyncio.to_thread(requests.get, url, timeout=10)
+
+            if resp.status_code == 403 or resp.status_code == 451:
+                err_msg = f"Binance API {resp.status_code} - IP bloklandi (ABD sunucu?). Railway bolgesini EU/Asia yapin."
+                state["last_error"] = err_msg
+                state["error_count"] += 1
+                state["is_connected"] = False
+                print(f"[SCAN ERR] {err_msg}")
+                base_idx += 1
+                await asyncio.sleep(5)
+                continue
+
             resp.raise_for_status()
             data = resp.json()
 
@@ -384,6 +408,7 @@ async def depth_scan_loop():
                 state["current_price"] = cp
                 state["is_connected"] = True
                 state["last_scan_ts"] = time.time()
+                state["last_error"] = ""
 
                 dist = float(config.get("distance_limit", 200.0))
                 fb, fa = [], []
@@ -409,8 +434,19 @@ async def depth_scan_loop():
                 if config.get("bot_enabled", True):
                     detect_and_track_walls(fb, fa, cp)
 
+        except requests.exceptions.ConnectionError as e:
+            state["is_connected"] = False
+            state["last_error"] = f"Baglanti hatasi: {str(e)[:120]}"
+            state["error_count"] += 1
+            print(f"[SCAN ERR] Connection: {e}")
+        except requests.exceptions.Timeout:
+            state["is_connected"] = False
+            state["last_error"] = "Binance API timeout (10sn)"
+            state["error_count"] += 1
         except Exception as e:
             state["is_connected"] = False
+            state["last_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+            state["error_count"] += 1
             print(f"[SCAN ERR] {e}")
 
         await asyncio.sleep(3)
@@ -463,6 +499,8 @@ def api_status():
         "total_bid_depth": state["total_bid_depth"],
         "total_ask_depth": state["total_ask_depth"],
         "active_walls_count": len(state["active_walls"]),
+        "last_error": state["last_error"],
+        "error_count": state["error_count"],
     }
 
 
@@ -965,6 +1003,7 @@ async function updateStatus(){
 
   const wd=document.getElementById('wsDot'),wl=document.getElementById('wsLabel');
   if(d.is_connected){wd.className='dot dot-g';wl.textContent='Canli Bagli'}
+  else if(d.last_error){wd.className='dot dot-r';wl.textContent=d.last_error.substring(0,60);wl.title=d.last_error}
   else{wd.className='dot dot-r';wl.textContent='Baglanti Kesildi'}
 
   const bd=document.getElementById('botDot'),bl=document.getElementById('botLabel');
