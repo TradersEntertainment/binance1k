@@ -1,1 +1,1 @@
-worker: python btc_wall_bot.py
+web: python main.py
