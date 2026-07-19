@@ -16,11 +16,21 @@ if sys.platform == "win32":
         pass
 
 # ==============================================================================
-# CONFIGURATION
+# PERSISTENT STORAGE (Railway Volume)
 # ==============================================================================
+# Mount a Railway volume at /data and set DATA_DIR=/data in env vars.
+# All config and state files will be stored there and survive restarts.
 
-CONFIG_FILE = "config.json"
+DATA_DIR = os.environ.get("DATA_DIR", ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+STATE_FILE = os.path.join(DATA_DIR, "state.json")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+print(f"[STORAGE] Data directory: {DATA_DIR}")
+print(f"[STORAGE] Config file:   {CONFIG_FILE}")
+print(f"[STORAGE] State file:    {STATE_FILE}")
 
 DEFAULT_CONFIG = {
     "symbol": "BTCUSDT",
@@ -41,9 +51,10 @@ def load_config() -> dict:
                 data = json.load(f)
                 merged = DEFAULT_CONFIG.copy()
                 merged.update(data)
+                print(f"[STORAGE] Config loaded from {CONFIG_FILE}")
                 return merged
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[STORAGE] Config load error: {e}")
     return DEFAULT_CONFIG.copy()
 
 
@@ -51,15 +62,29 @@ def save_config(cfg: dict):
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
+        print(f"[STORAGE] Config saved to {CONFIG_FILE}")
     except Exception as e:
-        print(f"[CONFIG] Save error: {e}")
+        print(f"[STORAGE] Config save error: {e}")
 
 
 config = load_config()
 
 # ==============================================================================
-# STATE
+# STATE (with persistence)
 # ==============================================================================
+
+# Keys that get persisted to STATE_FILE
+PERSIST_KEYS = [
+    "wall_history",
+    "detected_walls_feed",
+    "walls_detected_today",
+    "walls_eaten_today",
+    "walls_pulled_today",
+    "ath_wall_qty",
+    "ath_wall_price",
+    "ath_wall_side",
+    "total_alerts_sent",
+]
 
 state = {
     "current_price": 0.0,
@@ -84,6 +109,37 @@ state = {
     "last_error": "",
     "error_count": 0,
 }
+
+
+def load_state():
+    """Load persisted state from disk on startup."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                for key in PERSIST_KEYS:
+                    if key in saved:
+                        state[key] = saved[key]
+                print(f"[STORAGE] State loaded from {STATE_FILE} "
+                      f"({len(state.get('wall_history', []))} history, "
+                      f"{state.get('total_alerts_sent', 0)} alerts)")
+        except Exception as e:
+            print(f"[STORAGE] State load error: {e}")
+
+
+def save_state():
+    """Persist important state fields to disk."""
+    try:
+        to_save = {key: state[key] for key in PERSIST_KEYS if key in state}
+        to_save["_saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(to_save, f, indent=2)
+    except Exception as e:
+        print(f"[STORAGE] State save error: {e}")
+
+
+# Load saved state on import
+load_state()
 
 # ==============================================================================
 # FASTAPI APP & MODELS
@@ -235,6 +291,7 @@ def add_to_feed(wall: dict, current_price: float, event: str):
     state["detected_walls_feed"].insert(0, record)
     if len(state["detected_walls_feed"]) > 50:
         state["detected_walls_feed"] = state["detected_walls_feed"][:50]
+    save_state()  # persist on every wall event
 
 
 def add_to_history(wall: dict, current_price: float, event: str):
@@ -452,9 +509,18 @@ async def depth_scan_loop():
         await asyncio.sleep(3)
 
 
+async def auto_save_loop():
+    """Auto-save state to disk every 30 seconds."""
+    while True:
+        await asyncio.sleep(30)
+        save_state()
+
+
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(depth_scan_loop())
+    asyncio.create_task(auto_save_loop())
+    print("[STARTUP] Background tasks launched.")
 
 
 # ==============================================================================
